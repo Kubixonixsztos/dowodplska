@@ -209,23 +209,229 @@
   <script src="assets/app/cache.js"></script>
 
   <script>
-    // === Wczytywanie danych z localStorage lub URL ===
-    const fields = [
-      'name','surname','nationality','birthday','pesel_value','seriesAndNumber','expiryDate',
-      'givenDate','fathersName','mothersName','familyName','sex','fathersFamilyName',
-      'mothersFamilyName','birthPlace','countryOfBirth','adress','homeDate','updateDate'
-    ];
-    const params = new URLSearchParams(window.location.search);
-    fields.forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      let value = params.get(id) || localStorage.getItem(id);
-      if (value) el.textContent = value;
-    });
-    // Sprawdź zdjęcie z URL lub localStorage
-    const photoUrl = params.get('image');
-    const photo = photoUrl || localStorage.getItem('userPhoto');
-    if (photo) document.getElementById('userPhoto').style.backgroundImage = `url(${photo})`;
+    // === Funkcje pomocnicze do generowania danych ===
+    function generatePesel(day, month, year, sex) {
+      const d = day.toString().padStart(2, '0');
+      let m = month;
+      if (year >= 2000) m = month + 20;
+      m = m.toString().padStart(2, '0');
+      const y = year.toString().slice(-2);
+      const random = Math.floor(Math.random() * 900) + 100;
+      let lastDigit = Math.floor(Math.random() * 10);
+      if (sex === 'k' && lastDigit % 2 !== 0) lastDigit = (lastDigit + 1) % 10;
+      if (sex === 'm' && lastDigit % 2 === 0) lastDigit = (lastDigit + 1) % 10;
+      return `${y}${m}${d}${random}${lastDigit}`;
+    }
+
+    function generateSeriesAndNumber() {
+      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const serie = letters[Math.floor(Math.random() * letters.length)] + 
+                    letters[Math.floor(Math.random() * letters.length)] + 
+                    letters[Math.floor(Math.random() * letters.length)];
+      const number = Math.floor(Math.random() * 900000) + 100000;
+      return `${serie} ${number}`;
+    }
+
+    function generateGivenDate() {
+      const now = new Date();
+      const daysAgo = Math.floor(Math.random() * 365 * 3);
+      const givenDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+      return givenDate.toLocaleDateString('pl-PL');
+    }
+
+    function generateExpiryDate(givenDateStr) {
+      const parts = givenDateStr.split('.');
+      const givenDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      const expiryDate = new Date(givenDate);
+      expiryDate.setFullYear(givenDate.getFullYear() + 10);
+      return expiryDate.toLocaleDateString('pl-PL');
+    }
+
+    function generateHomeDate() {
+      const now = new Date();
+      const daysAgo = Math.floor(Math.random() * 365 * 10) + 365;
+      const homeDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+      return homeDate.toLocaleDateString('pl-PL');
+    }
+
+    // === Funkcje do obsługi IndexedDB ===
+    function getDb() {
+      return new Promise((resolve, reject) => {
+        const r = indexedDB.open('fobywatel', 1);
+        r.onupgradeneeded = e => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('data')) {
+            db.createObjectStore('data', { keyPath: 'data' });
+          }
+        };
+        r.onsuccess = e => resolve(e.target.result);
+        r.onerror = e => reject(e.target.error);
+      });
+    }
+
+    function getData(db, key) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('data', 'readonly');
+        const store = tx.objectStore('data');
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = e => reject(e.target.error);
+      });
+    }
+
+    // === Główna funkcja wczytywania danych ===
+    (async function loadData() {
+      try {
+        // Sprawdź najpierw parametry URL
+        const params = new URLSearchParams(window.location.search);
+        
+        // Jeśli są parametry URL, użyj ich
+        if (params.toString()) {
+          const fields = [
+            'name','surname','nationality','birthday','pesel_value','seriesAndNumber','expiryDate',
+            'givenDate','fathersName','mothersName','familyName','sex','fathersFamilyName',
+            'mothersFamilyName','birthPlace','countryOfBirth','adress','homeDate','updateDate'
+          ];
+          
+          fields.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            let value = params.get(id);
+            if (value) {
+              el.textContent = value;
+              // Zapisz do localStorage jako backup
+              localStorage.setItem(id, value);
+            }
+          });
+          
+          // Sprawdź zdjęcie z URL
+          const photoUrl = params.get('image');
+          if (photoUrl) {
+            document.getElementById('userPhoto').style.backgroundImage = `url(${photoUrl})`;
+            localStorage.setItem('userPhoto', photoUrl);
+          }
+          
+          return; // Zakończ, jeśli dane są z URL
+        }
+
+        // Jeśli nie ma URL, sprawdź localStorage
+        const fields = [
+          'name','surname','nationality','birthday','pesel_value','seriesAndNumber','expiryDate',
+          'givenDate','fathersName','mothersName','familyName','sex','fathersFamilyName',
+          'mothersFamilyName','birthPlace','countryOfBirth','adress','homeDate','updateDate'
+        ];
+        
+        let foundInLocalStorage = false;
+        fields.forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          let value = localStorage.getItem(id);
+          if (value) {
+            el.textContent = value;
+            foundInLocalStorage = true;
+          }
+        });
+        
+        const photo = localStorage.getItem('userPhoto');
+        if (photo) {
+          document.getElementById('userPhoto').style.backgroundImage = `url(${photo})`;
+          foundInLocalStorage = true;
+        }
+
+        // Jeśli znaleziono w localStorage, zakończ
+        if (foundInLocalStorage) return;
+
+        // Ostatnia opcja: spróbuj wczytać z IndexedDB
+        const db = await getDb();
+        const userData = await getData(db, 'data');
+        
+        if (userData) {
+          // Formatuj datę urodzenia
+          const birthday = `${userData.day.toString().padStart(2, '0')}.${userData.month.toString().padStart(2, '0')}.${userData.year}`;
+          
+          // Generuj dodatkowe dane jeśli nie istnieją
+          if (!localStorage.getItem('pesel_value')) {
+            const pesel = generatePesel(userData.day, userData.month, userData.year, userData.sex);
+            localStorage.setItem('pesel_value', pesel);
+          }
+          
+          if (!localStorage.getItem('seriesAndNumber')) {
+            const seriesAndNumber = generateSeriesAndNumber();
+            localStorage.setItem('seriesAndNumber', seriesAndNumber);
+          }
+          
+          if (!localStorage.getItem('givenDate')) {
+            const givenDate = generateGivenDate();
+            localStorage.setItem('givenDate', givenDate);
+          }
+          
+          if (!localStorage.getItem('expiryDate')) {
+            const givenDate = localStorage.getItem('givenDate');
+            const expiryDate = generateExpiryDate(givenDate);
+            localStorage.setItem('expiryDate', expiryDate);
+          }
+          
+          if (!localStorage.getItem('homeDate')) {
+            const homeDate = generateHomeDate();
+            localStorage.setItem('homeDate', homeDate);
+          }
+          
+          if (!localStorage.getItem('updateDate')) {
+            const updateDate = new Date().toLocaleDateString('pl-PL');
+            localStorage.setItem('updateDate', updateDate);
+          }
+          
+          // Formatuj adres
+          const adress = `UL. ${userData.address1}\n${userData.address2} ${userData.city}`.toUpperCase();
+          
+          // Ustaw wszystkie dane
+          document.getElementById('name').textContent = userData.name.toUpperCase();
+          document.getElementById('surname').textContent = userData.surname.toUpperCase();
+          document.getElementById('nationality').textContent = userData.nationality.toUpperCase();
+          document.getElementById('birthday').textContent = birthday;
+          document.getElementById('pesel_value').textContent = localStorage.getItem('pesel_value');
+          document.getElementById('seriesAndNumber').textContent = localStorage.getItem('seriesAndNumber');
+          document.getElementById('expiryDate').textContent = localStorage.getItem('expiryDate');
+          document.getElementById('givenDate').textContent = localStorage.getItem('givenDate');
+          document.getElementById('fathersName').textContent = userData.fathersName.toUpperCase();
+          document.getElementById('mothersName').textContent = userData.mothersName.toUpperCase();
+          document.getElementById('familyName').textContent = userData.familyName.toUpperCase();
+          document.getElementById('sex').textContent = (userData.sex === 'm' ? 'MĘŻCZYZNA' : 'KOBIETA');
+          document.getElementById('fathersFamilyName').textContent = userData.fathersFamilyName.toUpperCase();
+          document.getElementById('mothersFamilyName').textContent = userData.mothersFamilyName.toUpperCase();
+          document.getElementById('birthPlace').textContent = userData.birthPlace.toUpperCase();
+          document.getElementById('countryOfBirth').textContent = userData.countryOfBirth.toUpperCase();
+          document.getElementById('adress').innerHTML = adress.replace('\n', '<br>');
+          document.getElementById('homeDate').textContent = localStorage.getItem('homeDate');
+          document.getElementById('updateDate').textContent = localStorage.getItem('updateDate');
+          
+          // Zapisz do localStorage
+          localStorage.setItem('name', userData.name);
+          localStorage.setItem('surname', userData.surname);
+          localStorage.setItem('nationality', userData.nationality);
+          localStorage.setItem('birthday', birthday);
+          localStorage.setItem('fathersName', userData.fathersName);
+          localStorage.setItem('mothersName', userData.mothersName);
+          localStorage.setItem('familyName', userData.familyName);
+          localStorage.setItem('sex', userData.sex === 'm' ? 'MĘŻCZYZNA' : 'KOBIETA');
+          localStorage.setItem('fathersFamilyName', userData.fathersFamilyName);
+          localStorage.setItem('mothersFamilyName', userData.mothersFamilyName);
+          localStorage.setItem('birthPlace', userData.birthPlace);
+          localStorage.setItem('countryOfBirth', userData.countryOfBirth);
+          localStorage.setItem('adress', adress);
+        }
+        
+        // Pobierz zdjęcie z IndexedDB
+        const imageData = await getData(db, 'image');
+        if (imageData && imageData.image) {
+          document.getElementById('userPhoto').style.backgroundImage = `url(${imageData.image})`;
+          localStorage.setItem('userPhoto', imageData.image);
+        }
+        
+      } catch (error) {
+        console.error('Błąd wczytywania danych:', error);
+      }
+    })();
   </script>
 </body>
 </html>
